@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WORDLE</title>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <style>
+        :root {
+            --tile-border: #d3d6da;
+            --key-bg: #e8eff8;
+            --correct: #6aaa64;
+            --present: #c9b458;
+            --absent: #787c7e;
+            --kbd-absent: #3a3a3c;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            background: #ffffff;
+            overflow-x: hidden;
+        }
+
+        /* Анимации и стили модального окна */
+        #custom-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        #custom-modal.show {
+            display: flex;
+            opacity: 1;
+        }
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            max-width: 300px;
+            width: 80%;
+            transform: scale(0.7);
+            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        #custom-modal.show .modal-content {
+            transform: scale(1);
+        }
+        .modal-content p {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        .modal-btn {
+            padding: 10px 25px;
+            background: #000;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        #lobby-screen {
+            position: fixed; inset: 0; background: white; z-index: 1000;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            text-align: center;
+        }
+        
+        #lobby-screen h1 {
+            font-family: 'Clear Sans', 'Helvetica Neue', Arial, sans-serif;
+            font-size: 48px; font-weight: 900; margin-bottom: 30px; letter-spacing: 1px;
+        }
+
+        input#my-nickname { 
+            padding: 15px; font-size: 20px; border: 1px solid #ccc; border-radius: 8px; 
+            margin-bottom: 20px; width: 350px; text-align: center; outline: none; color: #333;
+        }
+
+        .btn-group { display: flex; gap: 10px; }
+
+        .find-btn { 
+            padding: 15px 30px; background: #000; color: #fff; border: none; 
+            cursor: pointer; font-weight: bold; font-size: 16px; border-radius: 8px; text-transform: uppercase;
+        }
+
+        header { 
+            font-family: 'Clear Sans', 'Helvetica Neue', Arial, sans-serif;
+            font-size: 36px; font-weight: 900; margin: 20px 0; text-transform: uppercase; 
+            letter-spacing: 1px; border-bottom: 1px solid var(--tile-border); width: 100%;
+            text-align: center; padding-bottom: 10px; color: #000;
+        }
+
+        .game-wrapper { width: 100vw; overflow-x: auto; display: flex; justify-content: center; padding: 0 20px; }
+        .game-container { 
+            display: flex; flex-direction: row; flex-wrap: nowrap; align-items: flex-start;
+            gap: 40px; padding: 20px; min-width: min-content; 
+        }
+        
+        .player-block { flex: 0 0 250px; display: flex; flex-direction: column; align-items: center; transition: opacity 0.3s; }
+        .player-block.inactive { opacity: 0.3; }
+        
+        .nickname-label { 
+            font-size: 22px; font-weight: bold; margin-bottom: 15px; text-transform: uppercase;
+            height: 35px; text-align: center; width: 100%;
+        }
+
+        .active-turn { border-bottom: 3px solid #000; color: #000; }
+
+        .board { display: grid; grid-template-rows: repeat(6, 1fr); gap: 6px; }
+        .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+        
+        .tile {
+            width: 50px; height: 50px; border: 2px solid var(--tile-border);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 30px; font-weight: bold; text-transform: uppercase;
+            user-select: none; transition: transform 0.25s linear;
+        }
+
+        .tile.pop { animation: pop 0.1s ease-in-out; border-color: #878a8c; }
+        @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        .flip { transform: rotateX(90deg); }
+
+        .correct { background: var(--correct) !important; color: white; border-color: var(--correct) !important; }
+        .present { background: var(--present) !important; color: white; border-color: var(--present) !important; }
+        .absent { background: var(--absent) !important; color: white; border-color: var(--absent) !important; }
+
+        /* Состояние заблокированной клавиатуры */
+        .keyboard { 
+            display: flex; flex-direction: column; gap: 8px; margin-top: 30px; padding-bottom: 40px; 
+            transition: opacity 0.3s ease;
+        }
+        .keyboard.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.5); }
+
+        .kbd-row { display: flex; justify-content: center; gap: 6px; }
+        .key {
+            background: var(--key-bg); border: none; border-radius: 4px;
+            height: 58px; min-width: 42px; cursor: pointer; 
+            font-weight: bold; font-size: 14px; text-transform: uppercase;
+            display: flex; align-items: center; justify-content: center;
+            color: #000; transition: background 0.5s ease, color 0.5s ease;
+        }
+        .key-enter { min-width: 80px; }
+        .key-back { min-width: 55px; }
+
+        .key.correct { background: var(--correct) !important; color: white; }
+        .key.present { background: var(--present) !important; color: white; }
+        .key.absent { background: var(--kbd-absent) !important; color: white; }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="custom-modal">
+        <div class="modal-content">
+            <p id="modal-text"></p>
+            <button class="modal-btn" onclick="closeModal()">OK</button>
+        </div>
+    </div>
+
+    <div id="lobby-screen">
+        <h1>WORDLE</h1>
+        <input type="text" id="my-nickname" placeholder="ВАШ НИК" maxlength="10">
+        <div class="btn-group">
+            <button class="find-btn" onclick="createGame()">СОЗДАТЬ ЛОББИ</button>
+            <button class="find-btn" style="background:#555;" onclick="joinRandomGame()">ПРИСОЕДИНИТЬСЯ</button>
+        </div>
+    </div>
+
+    <header id="game-header">WORDLE #0000</header>
+
+    <div class="game-wrapper">
+        <div class="game-container" id="game-main"></div>
+    </div>
+
+    <div class="keyboard" id="main-keyboard">
+        <div class="kbd-row" id="row1"></div>
+        <div class="kbd-row" id="row2"></div>
+        <div class="kbd-row" id="row3"></div>
+    </div>
+
+<script>
+    const firebaseConfig = {
+        databaseURL: "https://wordlie-e6e4d-default-rtdb.europe-west1.firebasedatabase.app/"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const SECRET_WORDS_POOL = ["ГОСТЬ", "СЛОВО", "АРБУЗ", "КНИГА", "ПИТОН", "МАГИЯ", "ЭКРАН", "ТЕКСТ", "НОМЕР", "ВРЕМЯ", "ПОИСК"]; 
+    const ROWS = 6;
+    const COLS = 5;
+    
+    let lobbyId = null;
+    let myPlayerIndex = -1;
+    let targetWord = ""; 
+    let players = ["", "", ""];
+    let currentPlayerIndex = 0;
+    let gameState = [];
+    let keyStatus = {};
+    let isProcessing = false;
+
+    function showMessage(text) {
+        const modal = document.getElementById('custom-modal');
+        document.getElementById('modal-text').textContent = text;
+        modal.style.display = 'flex';
+        setTimeout(() => modal.classList.add('show'), 10);
+    }
+
+    function closeModal() {
+        const modal = document.getElementById('custom-modal');
+        modal.classList.remove('show');
+        setTimeout(() => modal.style.display = 'none', 300);
+    }
+
+    setupKeyboard();
+
+    async function createGame() {
+        const nick = document.getElementById('my-nickname').value.trim();
+        if (!nick) return showMessage("Введите ник!");
+        
+        lobbyId = Math.floor(Math.random() * 9000) + 1000;
+        targetWord = SECRET_WORDS_POOL[Math.floor(Math.random() * SECRET_WORDS_POOL.length)];
+        myPlayerIndex = 0;
+        
+        const initialData = {
+            target: targetWord,
+            players: [nick.toUpperCase(), "", ""],
+            turn: 0,
+            status: "waiting"
+        };
+
+        await db.ref('lobbies/' + lobbyId).set(initialData);
+        enterGame();
+        startListening();
+    }
+
+    async function joinRandomGame() {
+        const nick = document.getElementById('my-nickname').value.trim();
+        if (!nick) return showMessage("Введите ник!");
+
+        const snapshot = await db.ref('lobbies').once('value');
+        const lobbies = snapshot.val();
+        
+        if (!lobbies) return showMessage("Нет активных лобби. Создайте своё!");
+
+        let foundId = null;
+        let targetIndex = -1;
+
+        for (let id in lobbies) {
+            const p = lobbies[id].players;
+            const emptyIdx = p.findIndex(name => name === "" || name === null);
+            if (emptyIdx !== -1) {
+                foundId = id;
+                targetIndex = emptyIdx;
+                break;
+            }
+        }
+
+        if (foundId !== null) {
+            lobbyId = foundId;
+            myPlayerIndex = targetIndex;
+            await db.ref(`lobbies/${lobbyId}/players/${targetIndex}`).set(nick.toUpperCase());
+            if (targetIndex === 2) {
+                await db.ref(`lobbies/${lobbyId}/status`).set("playing");
+            }
+            enterGame();
+            startListening();
+        } else {
+            showMessage("Нет свободных лобби!");
+        }
+    }
+
+    function startListening() {
+        db.ref('lobbies/' + lobbyId).on('value', (snapshot) => {
+            const data = snapshot.val();
+            if (!data) return;
+
+            targetWord = data.target;
+            currentPlayerIndex = data.turn;
+            
+            // Блокировка клавиатуры, если не наш ход
+            const kbd = document.getElementById('main-keyboard');
+            if (currentPlayerIndex === myPlayerIndex && !players.includes("")) {
+                kbd.classList.remove('disabled');
+            } else {
+                kbd.classList.add('disabled');
+            }
+
+            data.players.forEach((p, i) => {
+                players[i] = p || "";
+                const label = document.getElementById(`label-${i}`);
+                const block = document.getElementById(`player-block-${i}`);
+                if (label) {
+                    label.textContent = players[i] || "ОЖИДАНИЕ...";
+                    if (data.status === "playing") {
+                        label.classList.toggle('active-turn', i === currentPlayerIndex);
+                        block.classList.toggle('inactive', i !== currentPlayerIndex);
+                    } else {
+                        label.classList.remove('active-turn');
+                        block.classList.add('inactive');
+                    }
+                }
+            });
+
+            if (data.lastMove && data.lastMove.playerIndex !== myPlayerIndex) {
+                const state = gameState[data.lastMove.playerIndex];
+                if (state.row === data.lastMove.row) {
+                    renderRemoteMove(data.lastMove);
+                }
+            }
+        });
+    }
+
+    function enterGame() {
+        document.getElementById('lobby-screen').classList.add('hidden');
+        document.getElementById('game-header').textContent = `ЛОББИ #${lobbyId}`;
+        initGameUI();
+    }
+
+    function initGameUI() {
+        const main = document.getElementById('game-main');
+        main.innerHTML = '';
+        for(let i=0; i<3; i++) {
+            gameState[i] = { row: 0, col: 0, finished: false };
+            const block = document.createElement('div');
+            block.className = `player-block inactive`;
+            block.id = `player-block-${i}`;
+            let boardHtml = '<div class="board">';
+            for(let r=0; r<6; r++) {
+                boardHtml += '<div class="row">';
+                for(let c=0; c<5; c++) boardHtml += '<div class="tile"></div>';
+                boardHtml += '</div>';
+            }
+            boardHtml += '</div>';
+            block.innerHTML = `<div class="nickname-label" id="label-${i}">ОЖИДАНИЕ...</div>${boardHtml}`;
+            main.appendChild(block);
+        }
+    }
+
+    function handleInput(key) {
+        // Проверка хода: игнорируем ввод, если не наш ход
+        if (isProcessing || currentPlayerIndex !== myPlayerIndex) return;
+        if (players.includes("")) return; 
+
+        let state = gameState[myPlayerIndex];
+        if (state.finished) return;
+
+        const board = document.getElementById(`player-block-${myPlayerIndex}`).querySelector('.board');
+        const tiles = board.querySelectorAll('.row')[state.row].querySelectorAll('.tile');
+
+        if (key === "ENTER") { 
+            if (state.col === COLS) checkWord(); 
+        }
+        else if (key === "BACK") { 
+            if (state.col > 0) { state.col--; tiles[state.col].textContent = ""; tiles[state.col].classList.remove('pop'); } 
+        }
+        else if (state.col < COLS && key.length === 1) { 
+            tiles[state.col].textContent = key; tiles[state.col].classList.add('pop'); state.col++; 
+        }
+    }
+
+    function renderRemoteMove(move) {
+        const { playerIndex, guess, results, row } = move;
+        const block = document.getElementById(`player-block-${playerIndex}`);
+        const tiles = block.querySelectorAll('.row')[row].querySelectorAll('.tile');
+        
+        tiles.forEach((tile, i) => {
+            tile.textContent = guess[i];
+            tile.classList.add('flip');
+            setTimeout(() => {
+                tile.classList.remove('flip');
+                tile.classList.add(results[i]);
+            }, 250);
+        });
+        gameState[playerIndex].row = row + 1;
+    }
+
+    async function checkWord() {
+        isProcessing = true;
+        let state = gameState[myPlayerIndex];
+        const playerBlock = document.getElementById(`player-block-${myPlayerIndex}`);
+        const tiles = playerBlock.querySelectorAll('.row')[state.row].querySelectorAll('.tile');
+        
+        let guess = "";
+        tiles.forEach(t => guess += t.textContent);
+
+        let tempTarget = targetWord.split('');
+        const results = Array(COLS).fill('absent');
+
+        tiles.forEach((tile, i) => { if (guess[i] === targetWord[i]) { results[i] = 'correct'; tempTarget[i] = null; } });
+        tiles.forEach((tile, i) => { if (results[i] !== 'correct') { let idx = tempTarget.indexOf(guess[i]); if (idx !== -1) { results[i] = 'present'; tempTarget[idx] = null; } } });
+
+        tiles.forEach((tile, i) => {
+            setTimeout(() => {
+                tile.classList.add('flip');
+                setTimeout(() => { 
+                    tile.classList.remove('flip'); 
+                    tile.classList.add(results[i]); 
+                    updateKeyboard(guess[i], results[i]); 
+                }, 250);
+            }, i * 150);
+        });
+
+        setTimeout(async () => {
+            if (guess === targetWord) { 
+                state.finished = true;
+                showMessage(`ВЫ УГАДАЛИ!`); 
+            }
+            
+            const nextTurn = (myPlayerIndex + 1) % 3;
+            await db.ref(`lobbies/${lobbyId}`).update({
+                turn: nextTurn,
+                lastMove: { playerIndex: myPlayerIndex, guess: guess, results: results, row: state.row }
+            });
+
+            state.row++; state.col = 0;
+            isProcessing = false;
+        }, 1200);
+    }
+
+    function setupKeyboard() {
+        const rows = ["ЙЦУКЕНГШЩЗХЪ", "ФЫВАПРОЛДЖЭ", "ЯЧСМИТЬБЮ"];
+        rows.forEach((r, i) => {
+            const container = document.getElementById(`row${i+1}`);
+            if(i === 2) createKey(container, "⌫", "key-back");
+            r.split('').forEach(key => createKey(container, key));
+            if(i === 2) createKey(container, "ВВОД", "key-enter");
+        });
+    }
+
+    function createKey(container, text, extraClass = "") {
+        const btn = document.createElement('button');
+        btn.className = `key ${extraClass}`;
+        btn.setAttribute('data-key', text);
+        if (text === "⌫") {
+            btn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM18 9l-6 6M12 9l6 6"/></svg>`;
+            btn.onclick = () => handleInput("BACK");
+        } else {
+            btn.textContent = text;
+            btn.onclick = () => handleInput(text === "ВВОД" ? "ENTER" : text);
+        }
+        container.appendChild(btn);
+    }
+
+    function updateKeyboard(letter, status) {
+        const keyBtn = document.querySelector(`.key[data-key="${letter}"]`);
+        if (!keyBtn || keyStatus[letter] === 'correct') return;
+        keyStatus[letter] = status;
+        keyBtn.className = `key ${status}`;
+    }
+
+    window.onkeydown = (e) => {
+        // Физическая блокировка клавиш клавиатуры, если не наш ход
+        if (currentPlayerIndex !== myPlayerIndex) return;
+        
+        if (e.key === "Enter") handleInput("ENTER");
+        else if (e.key === "Backspace") handleInput("BACK");
+        else if (/^[а-яёА-ЯЁ]$/.test(e.key)) handleInput(e.key.toUpperCase());
+    };
+</script>
+</body>
+</html>
